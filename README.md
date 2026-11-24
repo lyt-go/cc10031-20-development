@@ -77,5 +77,33 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 接入监控：缺口定位与重传结算
+
+接入监控不与通用资源路由混用，固定路径在 `app/routers/monitor.py` 注册，领域逻辑在
+`app/services/ingest_monitor.py`。它按「测点 + 事件时间 + 到达顺序」登记服务端实收凭证，
+重复上送只追加凭证流水、绝不把同一采样重复计入实收集合；相邻与交叠的已收批次分别对账。
+
+| 方法与路径 | 作用 |
+| --- | --- |
+| `POST /api/ingest-monitor/receipts` | 登记一批实际到达样本（接收凭证），按批次与到达顺序留痕，重复到达不重复计点 |
+| `GET /api/ingest-monitor/gaps?point=&start_time=&end_time=` | 按事件时间窗口对账实收样本，定位剩余缺口（可重传区间），固化查询快照并返回各批次对账 |
+| `GET /api/ingest-monitor/snapshots/{snapshot_id}` | 读取某次缺口查询的捕获快照，作为派发与结算基线 |
+| `POST /api/ingest-monitor/replays` | 依据快照发起重传；派发前重新对账，剔除查询后迟到补齐的部分，返回实际送出与未发送区间 |
+| `POST /api/ingest-monitor/replays/{replay_key}/settle` | 重传落地后按实际实收结算；半段补齐只更新剩余缺口，不因发送成功关闭整段 |
+
+关键语义：
+
+- 缺口查询只回答“查询时刻”的实收缺口，并把期望/实收/缺口序号与批次对账写入
+  `data/gap_reconcile/<snapshot_id>.json`，作为后续派发的合理捕获范围。
+- 派发时重新读取接收凭证：查询与派发之间的迟到上送会从待发范围剔除（`late_covered_after_query`），
+  续发只覆盖快照缺口，新到数据不会被当成缺口重发；快照缺口之外的重传请求直接拒绝。
+- 结算以凭证为准：发了但没落地的采样不能划掉缺口；重复到达的采样只计一次
+  （`duplicate_in_replay_count` 单独留痕）；`fully_closed=false` 时区间重采申请保持待重采，
+  剩余缺口可再次发起重传。
+
+数据产物：`data/receipts/<测点>_receipts.jsonl`（凭证流水）、
+`data/gap_reconcile/`（查询快照）、`data/replay_settlements/`（重传结算与审计事件）。
+验收用例见 `backend/tests/test_ingest_monitor.py`。
+
 领域：数据工程
 子方向：数据采集、爬虫与RPA

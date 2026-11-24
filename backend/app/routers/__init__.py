@@ -1,6 +1,6 @@
-"""业务路由汇总：所有模块共用一套资源路由，由领域服务完成分派。"""
+"""业务路由汇总：固定路径的接入监控路由先注册，通用资源动态路由随后注册。"""
 from __future__ import annotations
 
-from app.routers import resource
+from app.routers import monitor, resource
 
-ROUTERS = [resource]
+ROUTERS = [monitor, resource]
